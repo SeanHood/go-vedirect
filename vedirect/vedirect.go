@@ -1,11 +1,11 @@
 package vedirect
 
 import (
-	//"bytes"
 	"fmt"
+	"io"
 	"log"
-	//"os"
-	//"strings"
+	"os"
+
 	"github.com/tarm/serial"
 )
 
@@ -17,61 +17,67 @@ const (
 	WaitHeader = 5
 )
 
+// Block :
 type Block struct {
 	checksum int
 	fields   map[string]string
 }
 
-func (b Block) Validate() bool {
-	if b.checksum%256 == 0 {
-		return true
-	}
-	return false
-}
-
+// Stream :
 type Stream struct {
 	Device string
-	//Port   *os.File
-	Port  *serial.Port
-	State int
+	Port   io.Reader
+	State  int
 }
 
+// Streamer :
 type Streamer interface {
 	Read() int
 }
 
-func NewStream(dev string) Stream {
-	s := Stream{}
-	s.Device = dev
-	s.State = 0
-	var err error
-
-	c := &serial.Config{Name: s.Device, Baud: 19200}
-	s.Port, err = serial.OpenPort(c)
+// OpenSerial as the name suggests is for opening serial devices
+// to be fed into NewStream
+func OpenSerial(dev string) io.Reader {
+	c := &serial.Config{Name: dev, Baud: 19200}
+	s, err := serial.OpenPort(c)
 	if err != nil {
 		log.Fatal(err)
 	}
-	/*
-		s.Port, err = os.Open(s.Device)
-		if err != nil {
-			log.Fatal(err)
-		}
-	*/
-	fmt.Println("Stream initialized:", s)
+
 	return s
 }
 
+// OpenFile for opening files to be fed into NewStream
+func OpenFile(dev string) io.Reader {
+	s, err := os.Open(dev)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return s
+}
+
+// NewStream is for initalising a stream for reading blocks
+func NewStream(stream io.Reader) Stream {
+	s := Stream{}
+	s.Port = stream
+	s.State = 0
+
+	log.Println("Stream initialized:", s)
+	return s
+}
+
+// ReadBlock where the magic happens!
 // Field format: <Newline><Field-Label><Tab><Field-Value>
 // Last field in block will always be "Checksum".
 // The value is a single byte, and the modulo 256 sum
 // of all bytes in a block will equal 0 if there were
 // no transmission errors.
-
 func (s *Stream) ReadBlock() (Block, int) {
 	var b = Block{}
 	b.fields = make(map[string]string)
-	var frame_length int = 0
-	var prev_state int
+	var frameLength int = 0
+	var prevState int
 	//var label string
 	//var value string
 	var label = make([]byte, 0, 9)  // VE recommended buffer size.
@@ -93,16 +99,16 @@ func (s *Stream) ReadBlock() (Block, int) {
 		// they mess up our checksum and we lose the current block.
 		if char == ':' && s.State != InChecksum { // ":": beginning of frame
 			//if str == ":" { // ":": beginning of frame
-			prev_state = s.State // save state
+			prevState = s.State // save state
 			s.State = InFrame
-			frame_length = 1
+			frameLength = 1
 			continue
 		}
 		if s.State == InFrame {
-			frame_length = frame_length + 1
+			frameLength = frameLength + 1
 			if str == "\n" { // end of frame
-				s.State = prev_state // restore state
-				fmt.Printf("%d bytes HEX frame ignored\n", frame_length)
+				s.State = prevState // restore state
+				fmt.Printf("%d bytes HEX frame ignored\n", frameLength)
 			}
 			continue // ignore frame contents
 		}
@@ -155,4 +161,9 @@ func (s *Stream) ReadBlock() (Block, int) {
 			}
 		}
 	}
+}
+
+// Fields : Getter for fields
+func (b Block) Fields() map[string]string {
+	return b.fields
 }
